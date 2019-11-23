@@ -2,6 +2,9 @@
 
 #include "httpd.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 CgiStatus cgiRedirect(HttpdConnData *connData);
 
 // This CGI function redirects to a fixed url of http://[hostname]/ if hostname
@@ -28,3 +31,6 @@ CgiStatus cgiRedirect(HttpdConnData *connData);
 CgiStatus cgiRedirectToHostname(HttpdConnData *connData);
 
 CgiStatus cgiRedirectApClientToHostname(HttpdConnData *connData);
+#ifdef __cplusplus
+}
+#endif

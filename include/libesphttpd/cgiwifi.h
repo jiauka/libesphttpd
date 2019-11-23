@@ -3,6 +3,9 @@
 
 #include "httpd.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 CgiStatus cgiWiFiScan(HttpdConnData *connData);
 CgiStatus tplWlan(HttpdConnData *connData, char *token, void **arg);
 CgiStatus cgiWiFi(HttpdConnData *connData);
@@ -16,6 +19,9 @@ CgiStatus cgiWiFiConnStatus(HttpdConnData *connData);
 esp_err_t initCgiWifi(void);
 void cgiWifiEventCb(system_event_t *event);
 CgiStatus cgiWiFiStartWps(HttpdConnData *connData);
+#endif
+#ifdef __cplusplus
+}
 #endif
 
 

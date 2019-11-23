@@ -109,9 +109,7 @@ typedef struct {
 	int filetype;
 	int flashPos;
 	char pageData[PAGELEN];
-#ifndef ESP32
 	int pagePos;
-#endif
 	int address;
 	int len;
 	int skip;
@@ -321,6 +319,121 @@ CgiStatus ICACHE_FLASH_ATTR cgiUploadFirmware(HttpdConnData *connData) {
 		return HTTPD_CGI_DONE;
 	}
 
+	return HTTPD_CGI_MORE;
+}
+CgiStatus ICACHE_FLASH_ATTR cgiUploadSPIFFS(HttpdConnData *connData) {
+	CgiUploadFlashDef *def=(CgiUploadFlashDef*)connData->cgiArg;
+	UploadState *state=(UploadState *)connData->cgiData;
+	esp_err_t err;
+
+	if (connData->isConnectionClosed) {
+		//Connection aborted. Clean up.
+		if (state!=NULL) free(state);
+		return HTTPD_CGI_DONE;
+	}
+
+	if (state == NULL) {
+		//First call. Allocate and initialize state variable.
+		ESP_LOGD(TAG, "Firmware upload cgi start");
+		state = malloc(sizeof(UploadState));
+		if (state==NULL) {
+			ESP_LOGE(TAG, "Can't allocate firmware upload struct");
+			return HTTPD_CGI_DONE;
+		}
+		memset(state, 0, sizeof(UploadState));
+        state->state=FLST_START;
+		state->err="Premature end";
+		state->update_partition = NULL;
+		// check arg partition name
+		char arg_partition_buf[16] = "";
+		int len;
+//// HTTP GET queryParameter "partition" : string
+	    len=httpdFindArg(connData->getArgs, "partition", arg_partition_buf, sizeof(arg_partition_buf));
+	    if (len > 0)
+	    {
+	    	state->update_partition = esp_partition_find_first(ESP_PARTITION_TYPE_DATA,ESP_PARTITION_SUBTYPE_DATA_SPIFFS,arg_partition_buf);
+	    }
+	    if (state->update_partition == NULL)
+	    {
+			ESP_LOGE(TAG, "update_partition not found!");
+			state->err="update_partition not found!";
+			state->state=FLST_ERROR;
+	    }
+
+		connData->cgiData=state;
+	}
+
+	char *data = connData->post.buff;
+	int dataLen = connData->post.buffLen;
+
+	while (dataLen!=0) {
+		if (state->state==FLST_START) {
+			//First call. Assume the header of whatever we're uploading already is in the POST buffer.
+ 			if (connData->post.len > def->spiffsSize) {
+				state->err="Firmware image too large";
+				state->state=FLST_ERROR;
+			} else {
+				state->len=connData->post.len;
+				state->address=def->spiffsPos;
+				state->state=FLST_WRITE;
+			}
+		} 
+       else if (state->state==FLST_WRITE) {
+			//Copy bytes to page buffer, and if page buffer is full, flash the data.
+			//First, calculate the amount of bytes we need to finish the page buffer.
+			int lenLeft=PAGELEN-state->pagePos;
+			if (state->len<lenLeft) lenLeft=state->len; //last buffer can be a cut-off one
+			//See if we need to write the page.
+			if (dataLen<lenLeft) {
+				//Page isn't done yet. Copy data to buffer and exit.
+				memcpy(&state->pageData[state->pagePos], data, dataLen);
+				state->pagePos+=dataLen;
+				state->len-=dataLen;
+				dataLen=0;
+			} else {
+				//Finish page; take data we need from post buffer
+				memcpy(&state->pageData[state->pagePos], data, lenLeft);
+				data+=lenLeft;
+				dataLen-=lenLeft;
+				state->pagePos+=lenLeft;
+				state->len-=lenLeft;
+				//Erase sector, if needed
+				if ((state->address&(SPI_FLASH_SEC_SIZE-1))==0) {
+					spi_flash_erase_sector(state->address/SPI_FLASH_SEC_SIZE);
+				}
+				//Write page
+				//httpd_printf("Writing %d bytes of data to SPI pos 0x%x...\n", state->pagePos, state->address);
+				spi_flash_write(state->address, (uint32 *)state->pageData, state->pagePos);
+				state->address+=PAGELEN;
+				state->pagePos=0;
+				if (state->len==0) {
+					//Done.
+                    state->state=FLST_DONE;
+                }
+			}
+		} 
+        else if (state->state==FLST_DONE) {
+			ESP_LOGE(TAG, "%d bogus bytes received after data received", dataLen);
+			//Ignore those bytes.
+			dataLen=0;
+		} else if (state->state==FLST_ERROR) {
+			//Just eat up any bytes we receive.
+			dataLen=0;
+		}
+	}
+	if  (connData->post.len == connData->post.received) {
+		cJSON *jsroot = cJSON_CreateObject();
+		if (state->state==FLST_DONE) {
+			state->err="Flash Success.";
+			ESP_LOGI(TAG, "Upload done. Sending response");
+		}
+		cJSON_AddStringToObject(jsroot, "message", state->err);
+		cJSON_AddBoolToObject(jsroot, "success", (state->state==FLST_DONE)?true:false);
+		free(state);
+
+		cgiJsonResponseCommon(connData, jsroot); // Send the json response!
+		return HTTPD_CGI_DONE;
+	}
 	return HTTPD_CGI_MORE;
 }
 
